@@ -315,9 +315,9 @@ def send_status_report(state, price, candle_time):
                 f"ROE trên margin mô phỏng: {roe:+.2f}%",
                 f"DCA đã dùng: {'Có' if dca_used else 'Chưa'}",
                 f"Margin mô phỏng: {margin_used:.2f} USDT",
-                f"Giá tham chiếu TP (+5% ROE): {fmt_price(tp_price)}",
-                f"Giá tham chiếu Soft SL (-35% ROE): {fmt_price(soft_sl_price)}",
-                f"Giá tham chiếu Emergency SL (-90% ROE): {fmt_price(emergency_sl_price)}",
+                "TP: đang theo dõi điều kiện RSI và ROE của chiến lược.",
+                "Soft SL: đang theo dõi ROE, ADX H1 và xác nhận 2 nến.",
+                "Emergency SL: đang giám sát ngưỡng bảo vệ khẩn cấp.",
             ])
         else:
             lines.extend([
@@ -520,7 +520,13 @@ def main():
                 exited = True
             elif tp_hit:
                 close_reason = "TAKE PROFIT"
-                send_event(close_reason, side, close, row["open_time"], roe)
+                tp_price = threshold_price(side, avg_entry, TP_ROE)
+                tp_rsi = LONG_RSI_TP if side == "LONG" else SHORT_RSI_TP
+                send_event(
+                    close_reason, side, close, row["open_time"], roe,
+                    f"Điều kiện TP đã đạt: RSI {'≥' if side == 'LONG' else '≤'} {tp_rsi:g}, "
+                    f"ROE ≥ +{TP_ROE:g}%. Mức giá tham chiếu TP: {fmt_price(tp_price)}",
+                )
                 events_sent += 1
                 exited = True
 
@@ -659,3 +665,4 @@ def main():
 if __name__ == "__main__":
     main()
     
+          
