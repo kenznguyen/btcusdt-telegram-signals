@@ -22,7 +22,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
+          repository: kenznguyen/btcusdt-telegram-signals2
           ref: main
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v7
