@@ -50,7 +50,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
-            - name: Save bot state
+      - name: Save bot state
         run: |
           if [ ! -f state.json ]; then
             echo "ERROR: state.json was not created."
