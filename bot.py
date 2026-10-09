@@ -269,6 +269,12 @@ def threshold_price(side, avg_entry, abs_roe):
     return avg_entry * (1.0 - move) if side == "LONG" else avg_entry * (1.0 + move)
 
 def main():
+    if os.getenv("TEST_TELEGRAM", "").strip() == "1":
+        telegram_send(
+            "✅ BTCUSDT Signal Bot: Telegram kết nối thành công!"
+        )
+        print("Telegram test message sent successfully.")
+        return
     m15_raw = get_klines(INTERVAL, 500)
     h1_raw = get_klines(H1_INTERVAL, 500)
     if len(m15_raw) < 100 or len(h1_raw) < 100:
