@@ -265,92 +265,96 @@ def roe_for(side, avg_entry, close):
         return ((close - avg_entry) / avg_entry) * LEVERAGE * 100
     return ((avg_entry - close) / avg_entry) * LEVERAGE * 100
 
+
 def send_status_report(state, price, candle_time):
-    side = state.get("side")
+    side = state.get("side", "FLAT")
     last_closed = state.get("last_closed")
+
     lines = [
-        "📊 BTCUSDT — BÁO CÁO VỊ THẾ",
-        f"Giá tham chiếu: {fmt_price(float(price))}",
-        f"Nến M15 gần nhất (UTC): {candle_time.strftime('%Y-%m-%d %H:%M')}",
-        "Chế độ: MÔ PHỎNG — KHÔNG ĐẶT LỆNH",
-        ""
+        "📊 BTCUSDT — BÁO CÁO TRẠNG THÁI",
+        f"🕒 Thời gian nến: {candle_time}",
+        f"💰 Giá tham chiếu: {fmt_price(price)}",
+        "",
     ]
 
     if side in ("LONG", "SHORT"):
-        qty = float(state.get("qty") or 0)
         avg_entry = float(state.get("avg_entry") or 0)
+        qty = float(state.get("qty") or 0)
         dca_used = bool(state.get("dca_used", False))
-        margin_used = INITIAL_MARGIN + (DCA_MARGIN if dca_used else 0)
-                if side == "LONG":
-            pnl = (float(price) - avg_entry) * qty
-        else:
-            pnl = (avg_entry - float(price)) * qty
-
-        roe = (
-            pnl / margin_used * 100
-            if margin_used > 0 else 0.0
+        margin_used = INITIAL_MARGIN + (
+            DCA_MARGIN if dca_used else 0
         )
 
-        tp_move = TP_ROE / (100.0 * LEVERAGE)
-        if side == "LONG":
-            tp_price = avg_entry * (1 + tp_move)
+        if avg_entry > 0 and qty > 0:
+            if side == "LONG":
+                pnl = (price - avg_entry) * qty
+            else:
+                pnl = (avg_entry - price) * qty
+
+            roe = (
+                pnl / margin_used * 100
+                if margin_used > 0
+                else 0
+            )
+
+            tp_price = threshold_price(
+                side, avg_entry, 5.0
+            )
+            soft_sl_price = threshold_price(
+                side, avg_entry, -35.0
+            )
+            emergency_sl_price = threshold_price(
+                side, avg_entry, -90.0
+            )
+
+            lines.extend([
+                f"📌 Vị thế hiện tại: {side}",
+                f"Giá vào trung bình: {fmt_price(avg_entry)}",
+                f"Số lượng: {qty:.8f} BTC",
+                f"PnL chưa thực hiện (ước tính): {pnl:+.4f} USDT",
+                f"ROE trên margin mô phỏng: {roe:+.2f}%",
+                f"DCA đã dùng: {'Có' if dca_used else 'Chưa'}",
+                f"Margin mô phỏng: {margin_used:.2f} USDT",
+                f"Giá tham chiếu TP (+5% ROE): {fmt_price(tp_price)}",
+                f"Giá tham chiếu Soft SL (-35% ROE): {fmt_price(soft_sl_price)}",
+                f"Giá tham chiếu Emergency SL (-90% ROE): {fmt_price(emergency_sl_price)}",
+            ])
         else:
-            tp_price = avg_entry * (1 - tp_move)
-
-        soft_sl_price = threshold_price(
-    side, avg_entry, abs(SOFT_SL_ROE)
-)
-        emergency_sl_price = threshold_price(
-    side, avg_entry, abs(EMERGENCY_SL_ROE)
-)
-
-
-
-        lines.extend([
-            "📍 VỊ THẾ HIỆN TẠI",
-            f"Chiều: {side}",
-            f"Giá vốn trung bình: {fmt_price(avg_entry)}",
-            f"Khối lượng mô phỏng: {qty:.8f} BTC",
-            f"PnL chưa chốt (ước tính): {pnl:+.2f} USDT",
-            f"ROE trên margin ước tính: {roe:+.2f}%",
-            f"DCA: {'Đã dùng' if dca_used else 'Chưa dùng'}",
-            f"Margin mô phỏng: {margin_used:.2f} USDT",
-            f"Mốc giá tham chiếu TP: {fmt_price(tp_price)}",
-            f"Mốc Soft SL: {fmt_price(soft_sl_price)}",
-            f"Mốc Emergency SL: {fmt_price(emergency_sl_price)}",
-            ""
-        ])
+            lines.extend([
+                f"📌 Vị thế hiện tại: {side}",
+                "⚠️ Thiếu giá vào hoặc số lượng hợp lệ; chưa tính được PnL.",
+            ])
     else:
         lines.extend([
-            "📍 VỊ THẾ HIỆN TẠI: FLAT",
-            "Không có vị thế mô phỏng đang mở.",
-            ""
+            "📌 Vị thế hiện tại: FLAT",
+            "Hiện không có vị thế mở trong state.json.",
         ])
 
-    lines.append("🧾 VỊ THẾ GẦN NHẤT ĐÃ ĐÓNG")
+    lines.extend(["", "🧾 VỊ THẾ ĐÃ ĐÓNG GẦN NHẤT"])
 
-    if last_closed:
+    if isinstance(last_closed, dict) and last_closed:
+        closed_side = last_closed.get("side", "N/A")
+        reason = last_closed.get("reason", "N/A")
+        entry = last_closed.get("avg_entry")
+        exit_price = last_closed.get("exit_price")
+        pnl = last_closed.get("pnl_usd")
+        closed_roe = last_closed.get("roe_pct")
+        exit_time = last_closed.get("exit_time", "N/A")
+
         lines.extend([
-            f"Chiều: {last_closed.get('side', 'N/A')}",
-            f"Lý do đóng: {last_closed.get('reason', 'N/A')}",
-            f"Giá vào trung bình: {fmt_price(float(last_closed.get('avg_entry', 0)))}",
-            f"Giá đóng tham chiếu: {fmt_price(float(last_closed.get('exit_price', 0)))}",
-            f"PnL gộp ước tính: {float(last_closed.get('pnl_usd', 0)):+.2f} USDT",
-            f"ROE trên margin ước tính: {float(last_closed.get('roe_pct', 0)):+.2f}%",
-            f"Thời điểm đóng (UTC): {last_closed.get('exit_time', 'N/A')}"
+            f"Hướng: {closed_side}",
+            f"Lý do đóng: {reason}",
+            f"Giá vào TB: {fmt_price(entry) if entry is not None else 'N/A'}",
+            f"Giá đóng: {fmt_price(exit_price) if exit_price is not None else 'N/A'}",
+            f"PnL đã đóng: {float(pnl):+.4f} USDT" if pnl is not None else "PnL đã đóng: N/A",
+            f"ROE khi đóng: {float(closed_roe):+.2f}%" if closed_roe is not None else "ROE khi đóng: N/A",
+            f"Thời gian đóng: {exit_time}",
         ])
     else:
-        lines.append("Chưa có dữ liệu vị thế đã đóng được lưu.")
-
-    lines.extend([
-        "",
-        "PnL chưa tính phí giao dịch và funding.",
-        "Các mốc TP/SL là giá tham chiếu, không phải lệnh thực.",
-        "Giá và ROE chỉ là ước tính từ nến đã đóng."
-    ])
+        lines.append("Chưa có dữ liệu vị thế đã đóng.")
 
     telegram_send("\n".join(lines))
-
+    
 def threshold_price(side, avg_entry, abs_roe):
     move = abs(abs_roe) / (100.0 * LEVERAGE)
     return avg_entry * (1.0 - move) if side == "LONG" else avg_entry * (1.0 + move)
