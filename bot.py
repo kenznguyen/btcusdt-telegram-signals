@@ -392,17 +392,14 @@ def main():
 
     new_rows = m15[m15["open_time"] > last_processed] if last_processed is not None else m15.tail(1)
     if new_rows.empty:
-    latest = m15.iloc[-1]
-
-    save_state(state)
-    send_status_report(
-        state,
-        float(latest["close"]),
-        latest["open_time"]
+        latest = m15.iloc[-1]
+        send_status_report(
+            state,
+            float(latest["close"]),
+            str(latest["open_time"])
     )
-
-    print("No new closed M15 candle; status report sent.")
-    return
+        print("No new candles; status report sent.")
+        return
     
 
     events_sent = 0
