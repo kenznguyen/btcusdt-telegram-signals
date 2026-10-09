@@ -30,6 +30,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+        
+      - name: Test Telegram
+        if: ${{ vars.TEST_TELEGRAM == '1' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c 'import os, requests; token=os.environ["TELEGRAM_BOT_TOKEN"]; chat=os.environ["TELEGRAM_CHAT_ID"]; r=requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat, "text": "✅ BTCUSDT: Telegram test thành công."}, timeout=20); print("HTTP:", r.status_code); print(r.text); r.raise_for_status()'
+          
+
       - name: Run signal bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
