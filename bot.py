@@ -531,7 +531,7 @@ def main():
 
     side, avg_entry, qty, dca_used = None, 0.0, 0.0, False
     # Không mở vị thế mới trên cùng nến vừa đóng vị thế.
-        if side is None and not exited:
+    if side is None and not exited:
             if long_signal:
                 new_qty = INITIAL_MARGIN * LEVERAGE / close
                 state.update({"side": "LONG", "qty": new_qty, "avg_entry": close,
