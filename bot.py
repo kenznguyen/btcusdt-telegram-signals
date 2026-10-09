@@ -275,6 +275,7 @@ def main():
         )
         print("Telegram test message sent successfully.")
         return
+        
     m15_raw = get_klines(INTERVAL, 500)
     h1_raw = get_klines(H1_INTERVAL, 500)
     if len(m15_raw) < 100 or len(h1_raw) < 100:
