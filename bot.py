@@ -481,11 +481,12 @@ def main():
                 exited = True
 
             if exited:
-    # Lưu kết quả vị thế vừa đóng trước khi xóa trạng thái.
-    closed_qty = float(state.get("qty") or qty)
-    closed_avg = float(state.get("avg_entry") or avg_entry)
-    closed_dca = bool(state.get("dca_used", False))
-
+                # Lưu kết quả vị thế vừa đóng trước khi xóa trạng thái.
+                closed_qty = float(state.get("qty") or qty)
+                closed_avg = float(state.get("avg_entry") or avg_entry)
+                closed_dca = bool(state.get("dca_used", False))
+    
+    
     if side == "LONG":
         realized_pnl = (close - closed_avg) * closed_qty
     else:
