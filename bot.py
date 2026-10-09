@@ -209,7 +209,8 @@ def load_state():
         "avg_entry": 0.0,
         "dca_used": False,
         "entry_time": None,
-        "last_event": None
+        "last_event": None,
+        "last_closed": None
     }
     if not os.path.exists(STATE_FILE):
         return default
@@ -264,6 +265,92 @@ def roe_for(side, avg_entry, close):
         return ((close - avg_entry) / avg_entry) * LEVERAGE * 100
     return ((avg_entry - close) / avg_entry) * LEVERAGE * 100
 
+def send_status_report(state, price, candle_time):
+    side = state.get("side")
+    last_closed = state.get("last_closed")
+    lines = [
+        "📊 BTCUSDT — BÁO CÁO VỊ THẾ",
+        f"Giá tham chiếu: {fmt_price(float(price))}",
+        f"Nến M15 gần nhất (UTC): {candle_time.strftime('%Y-%m-%d %H:%M')}",
+        "Chế độ: MÔ PHỎNG — KHÔNG ĐẶT LỆNH",
+        ""
+    ]
+
+    if side in ("LONG", "SHORT"):
+        qty = float(state.get("qty") or 0)
+        avg_entry = float(state.get("avg_entry") or 0)
+        dca_used = bool(state.get("dca_used", False))
+        margin_used = INITIAL_MARGIN + (DCA_MARGIN if dca_used else 0)
+                if side == "LONG":
+            pnl = (float(price) - avg_entry) * qty
+        else:
+            pnl = (avg_entry - float(price)) * qty
+
+        roe = (
+            pnl / margin_used * 100
+            if margin_used > 0 else 0.0
+        )
+
+        tp_move = TP_ROE / (100.0 * LEVERAGE)
+        if side == "LONG":
+            tp_price = avg_entry * (1 + tp_move)
+        else:
+            tp_price = avg_entry * (1 - tp_move)
+
+        soft_sl_price = threshold_price(
+    side, avg_entry, abs(SOFT_SL_ROE)
+)
+        emergency_sl_price = threshold_price(
+    side, avg_entry, abs(EMERGENCY_SL_ROE)
+)
+
+
+
+        lines.extend([
+            "📍 VỊ THẾ HIỆN TẠI",
+            f"Chiều: {side}",
+            f"Giá vốn trung bình: {fmt_price(avg_entry)}",
+            f"Khối lượng mô phỏng: {qty:.8f} BTC",
+            f"PnL chưa chốt (ước tính): {pnl:+.2f} USDT",
+            f"ROE trên margin ước tính: {roe:+.2f}%",
+            f"DCA: {'Đã dùng' if dca_used else 'Chưa dùng'}",
+            f"Margin mô phỏng: {margin_used:.2f} USDT",
+            f"Mốc giá tham chiếu TP: {fmt_price(tp_price)}",
+            f"Mốc Soft SL: {fmt_price(soft_sl_price)}",
+            f"Mốc Emergency SL: {fmt_price(emergency_sl_price)}",
+            ""
+        ])
+    else:
+        lines.extend([
+            "📍 VỊ THẾ HIỆN TẠI: FLAT",
+            "Không có vị thế mô phỏng đang mở.",
+            ""
+        ])
+
+    lines.append("🧾 VỊ THẾ GẦN NHẤT ĐÃ ĐÓNG")
+
+    if last_closed:
+        lines.extend([
+            f"Chiều: {last_closed.get('side', 'N/A')}",
+            f"Lý do đóng: {last_closed.get('reason', 'N/A')}",
+            f"Giá vào trung bình: {fmt_price(float(last_closed.get('avg_entry', 0)))}",
+            f"Giá đóng tham chiếu: {fmt_price(float(last_closed.get('exit_price', 0)))}",
+            f"PnL gộp ước tính: {float(last_closed.get('pnl_usd', 0)):+.2f} USDT",
+            f"ROE trên margin ước tính: {float(last_closed.get('roe_pct', 0)):+.2f}%",
+            f"Thời điểm đóng (UTC): {last_closed.get('exit_time', 'N/A')}"
+        ])
+    else:
+        lines.append("Chưa có dữ liệu vị thế đã đóng được lưu.")
+
+    lines.extend([
+        "",
+        "PnL chưa tính phí giao dịch và funding.",
+        "Các mốc TP/SL là giá tham chiếu, không phải lệnh thực.",
+        "Giá và ROE chỉ là ước tính từ nến đã đóng."
+    ])
+
+    telegram_send("\n".join(lines))
+
 def threshold_price(side, avg_entry, abs_roe):
     move = abs(abs_roe) / (100.0 * LEVERAGE)
     return avg_entry * (1.0 - move) if side == "LONG" else avg_entry * (1.0 + move)
@@ -301,8 +388,18 @@ def main():
 
     new_rows = m15[m15["open_time"] > last_processed] if last_processed is not None else m15.tail(1)
     if new_rows.empty:
-        print("No new closed M15 candle.")
-        return
+    latest = m15.iloc[-1]
+
+    save_state(state)
+    send_status_report(
+        state,
+        float(latest["close"]),
+        latest["open_time"]
+    )
+
+    print("No new closed M15 candle; status report sent.")
+    return
+    
 
     events_sent = 0
     for idx, row in new_rows.iterrows():
@@ -383,11 +480,55 @@ def main():
                 exited = True
 
             if exited:
-                state.update({"side": None, "qty": 0.0, "avg_entry": 0.0,
-                              "dca_used": False, "entry_time": None})
-                side, avg_entry, qty, dca_used = None, 0.0, 0.0, False
-                # Do not open a new position on the same candle that closed one.
+    # Lưu kết quả vị thế vừa đóng trước khi xóa trạng thái.
+    closed_qty = float(state.get("qty") or qty)
+    closed_avg = float(state.get("avg_entry") or avg_entry)
+    closed_dca = bool(state.get("dca_used", False))
 
+    if side == "LONG":
+        realized_pnl = (close - closed_avg) * closed_qty
+    else:
+        realized_pnl = (closed_avg - close) * closed_qty
+
+    closed_margin = INITIAL_MARGIN + (
+        DCA_MARGIN if closed_dca else 0
+    )
+    closed_roe = (
+        realized_pnl / closed_margin * 100
+        if closed_margin > 0 else 0
+    )
+
+    if emergency_hit:
+        close_reason = "EMERGENCY SL"
+    elif soft_hit:
+        close_reason = "SOFT SL"
+    else:
+        close_reason = "TAKE PROFIT"
+
+    state["last_closed"] = {
+        "side": side,
+        "reason": close_reason,
+        "avg_entry": closed_avg,
+        "exit_price": close,
+        "qty": closed_qty,
+        "pnl_usd": realized_pnl,
+        "roe_pct": closed_roe,
+        "entry_time": state.get("entry_time"),
+        "exit_time": row["open_time"].strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
+    }
+
+    state.update({
+        "side": None,
+        "qty": 0.0,
+        "avg_entry": 0.0,
+        "dca_used": False,
+        "entry_time": None
+    })
+
+    side, avg_entry, qty, dca_used = None, 0.0, 0.0, False
+    # Không mở vị thế mới trên cùng nến vừa đóng vị thế.
         if side is None and not exited:
             if long_signal:
                 new_qty = INITIAL_MARGIN * LEVERAGE / close
@@ -424,8 +565,22 @@ def main():
         state["last_processed_open"] = row["open_time"].isoformat()
 
     save_state(state)
-    print(f"Processed {len(new_rows)} candle(s); sent {events_sent} Telegram event(s).")
-    print(f"State: side={state.get('side')}, dca_used={state.get('dca_used')}, last={state.get('last_processed_open')}")
 
+latest = m15.iloc[-1]
+send_status_report(
+    state,
+    float(latest["close"]),
+    latest["open_time"]
+)
+
+print(
+    f"Processed {len(new_rows)} candle(s); "
+    f"sent {events_sent} Telegram event(s)."
+)
+print(
+    f"Status report sent; side={state.get('side')}, "
+    f"dca_used={state.get('dca_used')}, "
+    f"last={state.get('last_processed_open')}"
+)
 if __name__ == "__main__":
     main()
