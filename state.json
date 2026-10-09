@@ -1,9 +1,10 @@
 {
-  "last_processed_open": "2026-10-09T03:00:00+00:00",
+  "last_processed_open": "2026-10-09T04:00:00+00:00",
   "side": null,
   "qty": 0.0,
   "avg_entry": 0.0,
   "dca_used": false,
   "entry_time": null,
-  "last_event": null
+  "last_event": null,
+  "last_closed": null
 }
