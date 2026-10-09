@@ -1,10 +1,10 @@
 {
-  "last_processed_open": "2026-10-09T04:00:00+00:00",
-  "side": null,
-  "qty": 0.0,
-  "avg_entry": 0.0,
+  "last_processed_open": "2026-10-09T04:15:00+00:00",
+  "side": "SHORT",
+  "qty": 0.007888349514563107,
+  "avg_entry": 82400.0,
   "dca_used": false,
-  "entry_time": null,
+  "entry_time": "2026-10-09T04:15:00+00:00",
   "last_event": null,
   "last_closed": null
 }
