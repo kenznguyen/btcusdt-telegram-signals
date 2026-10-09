@@ -38,105 +38,114 @@ def utc_now():
 
 
 def get_klines(interval, limit=500):
-    url = "https://api.bybit.com/v5/market/kline"
-
-    # Chuyển interval của Binance sang định dạng Bybit
-    interval_map = {
-        "1m": "1",
-        "3m": "3",
-        "5m": "5",
-        "15m": "15",
-        "30m": "30",
-        "1h": "60",
-        "2h": "120",
-        "4h": "240",
-        "6h": "360",
-        "12h": "720",
-        "1d": "D",
-        "1w": "W",
-        "1M": "M",
-    }
-
-    bybit_interval = interval_map.get(interval, interval)
-
-    params = {
-        "category": "linear",
-        "symbol": SYMBOL,
-        "interval": bybit_interval,
-        "limit": min(int(limit), 1000),
-    }
-
-    
-    r = requests.get(url, params=params, timeout=20)
-
-    if not r.ok:
-        print("Bybit HTTP status:", r.status_code)
-        print("Bybit response:", r.text[:1000])
         r.raise_for_status()
 
     payload = r.json()
 
+def get_klines(interval, limit=500):
+    url = "https://www.okx.com/api/v5/market/history-candles"
 
-    if payload.get("retCode") != 0:
-        raise RuntimeError(
-            f"Bybit API error: {payload.get('retMsg')}"
-        )
+    bar_map = {
+        "15m": "15m",
+        "1h": "1H",
+        "1d": "1Dutc",
+        "1w": "1Wutc",
+    }
 
-    rows = payload.get("result", {}).get("list", [])
+    bar = bar_map.get(interval)
+    if bar is None:
+        raise ValueError(f"Unsupported interval: {interval}")
+
+    rows = []
+    after = None
+
+    # OKX trả tối đa 300 nến mỗi lần gọi
+    while len(rows) < limit:
+        params = {
+            "instId": "BTC-USDT-SWAP",
+            "bar": bar,
+            "limit": str(min(300, limit - len(rows))),
+        }
+
+        if after is not None:
+            params["after"] = after
+
+        response = requests.get(url, params=params, timeout=20)
+
+        if not response.ok:
+            print("OKX HTTP status:", response.status_code)
+            print("OKX response:", response.text[:1000])
+            response.raise_for_status()
+
+        payload = response.json()
+
+        if payload.get("code") != "0":
+            raise RuntimeError(
+                f"OKX API error: {payload.get('msg')}"
+            )
+
+        batch = payload.get("data", [])
+        if not batch:
+            break
+
+        rows.extend(batch)
+
+        # Dữ liệu trả về từ mới đến cũ.
+        # Lấy timestamp của nến cũ nhất để truy vấn tiếp.
+        oldest_ts = batch[-1][0]
+
+        if len(batch) < 2 or len(rows) >= limit:
+            break
+
+        after = oldest_ts
 
     if not rows:
-        raise RuntimeError("Bybit API returned no candle data")
+        raise RuntimeError("OKX returned no candle data")
 
-    cols = [
-        "open_time", "open", "high", "low",
-        "close", "volume", "quote_volume"
-    ]
+    # Loại nến trùng và sắp xếp thời gian tăng dần
+    unique_rows = {row[0]: row for row in rows}
+    rows = sorted(unique_rows.values(), key=lambda row: int(row[0]))
 
-    df = pd.DataFrame(rows, columns=cols)
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "open_time", "open", "high", "low", "close",
+            "volume_contracts", "volume", "quote_volume", "confirm"
+        ],
+    )
 
-    for c in ["open", "high", "low", "close", "volume"]:
+    for c in ["open", "high", "low", "close", "volume", "quote_volume"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
 
     df["open_time"] = pd.to_datetime(
         pd.to_numeric(df["open_time"]),
         unit="ms",
-        utc=True
+        utc=True,
     )
 
-    # Bybit trả nến mới nhất trước; sắp xếp theo thời gian tăng dần
-    df = df.sort_values("open_time").reset_index(drop=True)
-
-    # Tính thời điểm đóng nến theo interval
-    interval_minutes = {
-        "1m": 1, "3m": 3, "5m": 5,
-        "15m": 15, "30m": 30,
-        "1h": 60, "2h": 120, "4h": 240,
-        "6h": 360, "12h": 720,
+    duration_map = {
+        "15m": pd.Timedelta(minutes=15),
+        "1h": pd.Timedelta(hours=1),
+        "1d": pd.Timedelta(days=1),
+        "1w": pd.Timedelta(weeks=1),
     }
 
-    if interval in interval_minutes:
-        duration = pd.Timedelta(
-            minutes=interval_minutes[interval]
-        )
-    elif interval == "1d":
-        duration = pd.Timedelta(days=1)
-    elif interval == "1w":
-        duration = pd.Timedelta(weeks=1)
-    else:
-        raise ValueError(
-            f"Unsupported candle interval: {interval}"
-        )
-
-    df["close_time"] = df["open_time"] + duration
-    df["quote_volume"] = pd.to_numeric(
-        df["quote_volume"], errors="coerce"
+    df["close_time"] = (
+        df["open_time"] + duration_map[interval]
     )
 
-    # Chỉ giữ nến đã đóng hoàn toàn
+    # Chỉ dùng nến đã đóng theo cờ xác nhận của OKX
+    # và thời gian đóng nến.
     now = pd.Timestamp.now(tz="UTC")
-    df = df.loc[df["close_time"] <= now].copy()
+    df = df.loc[
+        (df["confirm"].astype(str) == "1")
+        & (df["close_time"] <= now)
+    ].copy()
 
-    return df.reset_index(drop=True)
+    return df.tail(limit).reset_index(drop=True)
+    
+
+    
 
 def rma(series, length):
     """Wilder RMA with an SMA seed, close to Pine ta.rma()."""
