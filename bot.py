@@ -272,7 +272,7 @@ def send_status_report(state, price, candle_time):
 
     lines = [
         "📊 BTCUSDT — BÁO CÁO TRẠNG THÁI",
-        f"🕒 Thời gian nến: {candle_time}",
+        f"🕒 Thời gian nến: {candle_time.strftime('%Y-%m-%d %H:%M:%S UTC')}",
         f"💰 Giá tham chiếu: {fmt_price(price)}",
         "",
     ]
