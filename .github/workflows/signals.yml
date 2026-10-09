@@ -24,7 +24,8 @@ jobs:
         with:
           repository: kenznguyen/btcusdt-telegram-signals2
           ref: main
-          fetch-depth: 1
+          token: ${{ secrets.REPO_PUSH_TOKEN }}
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v7
