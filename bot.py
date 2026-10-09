@@ -582,4 +582,80 @@ def main():
                     note=f"Khối lượng mô phỏng: {new_qty:.8f} BTC",
                 )
                 events_sent += 1
-            elif short_s
+            elif short_signal:
+                new_qty = INITIAL_MARGIN * LEVERAGE / close
+                state.update(
+                    {
+                        "side": "SHORT",
+                        "qty": new_qty,
+                        "avg_entry": close,
+                        "dca_used": False,
+                        "entry_time": row["open_time"].isoformat(),
+                    }
+                )
+                send_event(
+                    "SHORT ENTRY", "SHORT", close, row["open_time"],
+                    note=f"Khối lượng mô phỏng: {new_qty:.8f} BTC",
+                )
+                events_sent += 1
+
+        elif side and not exited and not dca_used:
+            current_roe = roe_for(side, avg_entry, close)
+            if side == "LONG":
+                dca_cond = (
+                    current_roe is not None
+                    and current_roe <= DCA_ROE
+                    and adx > DCA_ADX
+                    and rsi > LONG_DCA_RSI
+                    and rsi > prev_rsi
+                )
+            else:
+                dca_cond = (
+                    current_roe is not None
+                    and current_roe <= DCA_ROE
+                    and adx > DCA_ADX
+                    and rsi < SHORT_DCA_RSI
+                    and rsi < prev_rsi
+                )
+
+            if dca_cond:
+                add_qty = DCA_MARGIN * LEVERAGE / close
+                total_qty = qty + add_qty
+                if total_qty > 0:
+                    new_avg = (
+                        (avg_entry * qty) + (close * add_qty)
+                    ) / total_qty
+                    state.update(
+                        {
+                            "qty": total_qty,
+                            "avg_entry": new_avg,
+                            "dca_used": True,
+                        }
+                    )
+                    send_event(
+                        "DCA", side, close, row["open_time"], current_roe,
+                        f"Khối lượng DCA mô phỏng: {add_qty:.8f} BTC; "
+                        f"giá vốn mô phỏng sau DCA: {fmt_price(new_avg)}",
+                    )
+                    events_sent += 1
+
+        state["last_processed_open"] = row["open_time"].isoformat()
+
+    save_state(state)
+    latest = m15.iloc[-1]
+    send_status_report(state, float(latest["close"]), latest["open_time"])
+
+    print(
+        f"Processed {len(new_rows)} candle(s); "
+        f"sent {events_sent} Telegram event(s)."
+    )
+    print(
+        f"Status report sent; side={state.get('side')}, "
+        f"dca_used={state.get('dca_used')}, "
+        f"last={state.get('last_processed_open')}"
+    )
+
+
+if __name__ == "__main__":
+    main()
+    
