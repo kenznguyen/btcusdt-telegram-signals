@@ -315,8 +315,8 @@ def send_status_report(state, price, candle_time):
                 f"ROE trên margin mô phỏng: {roe:+.2f}%",
                 f"DCA đã dùng: {'Có' if dca_used else 'Chưa'}",
                 f"Margin mô phỏng: {margin_used:.2f} USDT",
-                "TP: đang theo dõi điều kiện RSI và ROE của chiến lược.",
-                "Soft SL: đang theo dõi ROE, ADX H1 và xác nhận 2 nến.",
+                "TP: đang theo dõi điều kiện.",
+                "Soft SL: đang theo dõi điều kiện.",
                 "Emergency SL: đang giám sát ngưỡng bảo vệ khẩn cấp.",
             ])
         else:
