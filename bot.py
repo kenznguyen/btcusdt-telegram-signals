@@ -36,21 +36,101 @@ FAPI = "https://fapi.binance.com"
 def utc_now():
     return datetime.now(timezone.utc)
 
+
 def get_klines(interval, limit=500):
-    url = f"{FAPI}/fapi/v1/klines"
-    r = requests.get(url, params={"symbol": SYMBOL, "interval": interval, "limit": limit}, timeout=20)
+    url = "https://api.bybit.com/v5/market/kline"
+
+    # Chuyển interval của Binance sang định dạng Bybit
+    interval_map = {
+        "1m": "1",
+        "3m": "3",
+        "5m": "5",
+        "15m": "15",
+        "30m": "30",
+        "1h": "60",
+        "2h": "120",
+        "4h": "240",
+        "6h": "360",
+        "12h": "720",
+        "1d": "D",
+        "1w": "W",
+        "1M": "M",
+    }
+
+    bybit_interval = interval_map.get(interval, interval)
+
+    params = {
+        "category": "linear",
+        "symbol": SYMBOL,
+        "interval": bybit_interval,
+        "limit": min(int(limit), 1000),
+    }
+
+    r = requests.get(url, params=params, timeout=20)
     r.raise_for_status()
-    rows = r.json()
-    cols = ["open_time","open","high","low","close","volume","close_time",
-            "quote_volume","trades","taker_base","taker_quote","ignore"]
+
+    payload = r.json()
+
+    if payload.get("retCode") != 0:
+        raise RuntimeError(
+            f"Bybit API error: {payload.get('retMsg')}"
+        )
+
+    rows = payload.get("result", {}).get("list", [])
+
+    if not rows:
+        raise RuntimeError("Bybit API returned no candle data")
+
+    cols = [
+        "open_time", "open", "high", "low",
+        "close", "volume", "quote_volume"
+    ]
+
     df = pd.DataFrame(rows, columns=cols)
-    for c in ["open","high","low","close","volume"]:
+
+    for c in ["open", "high", "low", "close", "volume"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
-    # Keep only fully closed candles; never calculate on a live candle.
+
+    df["open_time"] = pd.to_datetime(
+        pd.to_numeric(df["open_time"]),
+        unit="ms",
+        utc=True
+    )
+
+    # Bybit trả nến mới nhất trước; sắp xếp theo thời gian tăng dần
+    df = df.sort_values("open_time").reset_index(drop=True)
+
+    # Tính thời điểm đóng nến theo interval
+    interval_minutes = {
+        "1m": 1, "3m": 3, "5m": 5,
+        "15m": 15, "30m": 30,
+        "1h": 60, "2h": 120, "4h": 240,
+        "6h": 360, "12h": 720,
+    }
+
+    if interval in interval_minutes:
+        duration = pd.Timedelta(
+            minutes=interval_minutes[interval]
+        )
+    elif interval == "1d":
+        duration = pd.Timedelta(days=1)
+    elif interval == "1w":
+        duration = pd.Timedelta(weeks=1)
+    else:
+        raise ValueError(
+            f"Unsupported candle interval: {interval}"
+        )
+
+    df["close_time"] = df["open_time"] + duration
+    df["quote_volume"] = pd.to_numeric(
+        df["quote_volume"], errors="coerce"
+    )
+
+    # Chỉ giữ nến đã đóng hoàn toàn
     now = pd.Timestamp.now(tz="UTC")
-    return df.loc[df["close_time"] < now].copy().reset_index(drop=True)
+    df = df.loc[df["close_time"] <= now].copy()
+
+    return df.reset_index(drop=True)
 
 def rma(series, length):
     """Wilder RMA with an SMA seed, close to Pine ta.rma()."""
