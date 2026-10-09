@@ -361,12 +361,10 @@ def threshold_price(side, avg_entry, abs_roe):
 
 def main():
     if os.getenv("TEST_TELEGRAM", "").strip() == "1":
-        telegram_send(
-            "✅ BTCUSDT Signal Bot: Telegram kết nối thành công!"
-        )
+        telegram_send("✅ BTCUSDT Signal Bot: Telegram kết nối thành công!")
         print("Telegram test message sent successfully.")
         return
-        
+
     m15_raw = get_klines(INTERVAL, 500)
     h1_raw = get_klines(H1_INTERVAL, 500)
     if len(m15_raw) < 100 or len(h1_raw) < 100:
@@ -374,8 +372,6 @@ def main():
 
     m15 = add_indicators(m15_raw).reset_index(drop=True)
     h1 = add_indicators(h1_raw).reset_index(drop=True)
-    # Pine request.security(..., indicator[1], lookahead_on): use the
-    # last completed H1 candle before the current M15 candle's H1 bucket.
     h1_by_open = {row.open_time: row for row in h1.itertuples(index=False)}
     h1_times = list(h1["open_time"])
 
@@ -385,26 +381,26 @@ def main():
         last_processed = pd.Timestamp(last_processed)
         if last_processed.tzinfo is None:
             last_processed = last_processed.tz_localize("UTC")
+        else:
+            last_processed = last_processed.tz_convert("UTC")
     else:
-        # First deployment: start at the newest closed M15 candle only;
-        # do not replay historical signals into Telegram.
+        # First deployment: start at the latest closed candle only.
         last_processed = m15.iloc[-2]["open_time"] if len(m15) > 1 else None
 
-    new_rows = m15[m15["open_time"] > last_processed] if last_processed is not None else m15.tail(1)
+    new_rows = (
+        m15[m15["open_time"] > last_processed]
+        if last_processed is not None
+        else m15.tail(1)
+    )
+
     if new_rows.empty:
         latest = m15.iloc[-1]
-        send_status_report(
-            state,
-            float(latest["close"]),
-            str(latest["open_time"])
-    )
+        send_status_report(state, float(latest["close"]), latest["open_time"])
         print("No new candles; status report sent.")
         return
-    
 
     events_sent = 0
     for idx, row in new_rows.iterrows():
-        # Only process candles with complete indicator values.
         if pd.isna(row["rsi"]) or pd.isna(row["adx"]):
             state["last_processed_open"] = row["open_time"].isoformat()
             continue
@@ -414,9 +410,13 @@ def main():
         if not prior_h1_candidates:
             state["last_processed_open"] = row["open_time"].isoformat()
             continue
-        h1_time = prior_h1_candidates[-1]
-        h1row = h1_by_open[h1_time]
-        if pd.isna(h1row.plus_di) or pd.isna(h1row.minus_di) or pd.isna(h1row.adx):
+
+        h1row = h1_by_open[prior_h1_candidates[-1]]
+        if (
+            pd.isna(h1row.plus_di)
+            or pd.isna(h1row.minus_di)
+            or pd.isna(h1row.adx)
+        ):
             state["last_processed_open"] = row["open_time"].isoformat()
             continue
 
@@ -428,161 +428,158 @@ def main():
         close = float(row["close"])
         high = float(row["high"])
         low = float(row["low"])
+        candle_open = float(row["open"])
         rsi = float(row["rsi"])
         adx = float(row["adx"])
-        h1_plus, h1_minus, h1_adx = float(h1row.plus_di), float(h1row.minus_di), float(h1row.adx)
+        h1_plus = float(h1row.plus_di)
+        h1_minus = float(h1row.minus_di)
+        h1_adx = float(h1row.adx)
+
         h1_bull = h1_plus > h1_minus and h1_adx > H1_ADX_ENTRY
         h1_bear = h1_minus > h1_plus and h1_adx > H1_ADX_ENTRY
-        long_signal = h1_bull and prev_rsi <= LONG_RSI_ENTRY and rsi > LONG_RSI_ENTRY
-        short_signal = h1_bear and prev_rsi >= SHORT_RSI_ENTRY and rsi < SHORT_RSI_ENTRY
+        long_signal = (
+            h1_bull and prev_rsi <= LONG_RSI_ENTRY and rsi > LONG_RSI_ENTRY
+        )
+        short_signal = (
+            h1_bear and prev_rsi >= SHORT_RSI_ENTRY and rsi < SHORT_RSI_ENTRY
+        )
 
         side = state.get("side")
         avg_entry = float(state.get("avg_entry") or 0.0)
         qty = float(state.get("qty") or 0.0)
         dca_used = bool(state.get("dca_used", False))
         roe = roe_for(side, avg_entry, close)
-
-        # Exit priority: emergency SL, then soft SL, then TP.
-        # Candle OHLC only tells us that a threshold was touched, not the
-        # exact intrabar order or fill price.
         exited = False
+        close_reason = None
+
+        # Exit priority: emergency SL, soft SL, then TP.
         if side:
-            emergency_price = threshold_price(side, avg_entry, abs(EMERGENCY_SL_ROE))
+            emergency_price = threshold_price(
+                side, avg_entry, abs(EMERGENCY_SL_ROE)
+            )
             soft_price = threshold_price(side, avg_entry, abs(SOFT_SL_ROE))
-            emergency_hit = (side == "LONG" and low <= emergency_price) or (side == "SHORT" and high >= emergency_price)
+            emergency_hit = (
+                (side == "LONG" and low <= emergency_price)
+                or (side == "SHORT" and high >= emergency_price)
+            )
 
             h1_long_reversal = h1_minus > h1_plus and h1_adx > SOFT_SL_ADX
             h1_short_reversal = h1_plus > h1_minus and h1_adx > SOFT_SL_ADX
-            prev_row = m15.loc[idx - 1]
-            two_bear = close < float(row["open"]) and float(prev_row["close"]) < float(prev_row["open"])
-            two_bull = close > float(row["open"]) and float(prev_row["close"]) > float(prev_row["open"])
+            prev_row = m15.loc[idx - 1] if idx > 0 else None
+            two_bear = (
+                candle_open > close
+                and prev_row is not None
+                and float(prev_row["close"]) < float(prev_row["open"])
+            )
+            two_bull = (
+                close > candle_open
+                and prev_row is not None
+                and float(prev_row["close"]) > float(prev_row["open"])
+            )
             soft_hit = (
-                (side == "LONG" and low <= soft_price and h1_long_reversal and two_bear) or
-                (side == "SHORT" and high >= soft_price and h1_short_reversal and two_bull)
+                (
+                    side == "LONG"
+                    and low <= soft_price
+                    and h1_long_reversal
+                    and two_bear
+                )
+                or (
+                    side == "SHORT"
+                    and high >= soft_price
+                    and h1_short_reversal
+                    and two_bull
+                )
             )
             tp_hit = (
-                (side == "LONG" and rsi >= LONG_RSI_TP and roe is not None and roe >= TP_ROE) or
-                (side == "SHORT" and rsi <= SHORT_RSI_TP and roe is not None and roe >= TP_ROE)
+                side == "LONG"
+                and rsi >= LONG_RSI_TP
+                and roe is not None
+                and roe >= TP_ROE
+            ) or (
+                side == "SHORT"
+                and rsi <= SHORT_RSI_TP
+                and roe is not None
+                and roe >= TP_ROE
             )
 
             if emergency_hit:
-                send_event("EMERGENCY SL", side, close, row["open_time"], roe,
-                           f"Mức ngưỡng tham chiếu: {fmt_price(emergency_price)}")
+                close_reason = "EMERGENCY SL"
+                send_event(
+                    close_reason, side, close, row["open_time"], roe,
+                    f"Mức ngưỡng tham chiếu: {fmt_price(emergency_price)}",
+                )
                 events_sent += 1
                 exited = True
             elif soft_hit:
-                send_event("SOFT SL", side, close, row["open_time"], roe,
-                           f"Mức ngưỡng tham chiếu: {fmt_price(soft_price)}")
+                close_reason = "SOFT SL"
+                send_event(
+                    close_reason, side, close, row["open_time"], roe,
+                    f"Mức ngưỡng tham chiếu: {fmt_price(soft_price)}",
+                )
                 events_sent += 1
                 exited = True
             elif tp_hit:
-                send_event("TAKE PROFIT", side, close, row["open_time"], roe)
+                close_reason = "TAKE PROFIT"
+                send_event(close_reason, side, close, row["open_time"], roe)
                 events_sent += 1
                 exited = True
 
             if exited:
-                # Lưu kết quả vị thế vừa đóng trước khi xóa trạng thái.
-                closed_qty = float(state.get("qty") or qty)
-                closed_avg = float(state.get("avg_entry") or avg_entry)
-                closed_dca = bool(state.get("dca_used", False))
-    
-    
-    if side == "LONG":
-        realized_pnl = (close - closed_avg) * closed_qty
-    else:
-        realized_pnl = (closed_avg - close) * closed_qty
+                closed_qty = qty
+                closed_avg = avg_entry
+                closed_margin = INITIAL_MARGIN + (
+                    DCA_MARGIN if dca_used else 0
+                )
+                realized_pnl = (
+                    (close - closed_avg) * closed_qty
+                    if side == "LONG"
+                    else (closed_avg - close) * closed_qty
+                )
+                closed_roe = (
+                    realized_pnl / closed_margin * 100
+                    if closed_margin > 0
+                    else 0
+                )
+                state["last_closed"] = {
+                    "side": side,
+                    "reason": close_reason,
+                    "avg_entry": closed_avg,
+                    "exit_price": close,
+                    "qty": closed_qty,
+                    "pnl_usd": realized_pnl,
+                    "roe_pct": closed_roe,
+                    "entry_time": state.get("entry_time"),
+                    "exit_time": row["open_time"].strftime(
+                        "%Y-%m-%d %H:%M UTC"
+                    ),
+                }
+                state.update(
+                    {
+                        "side": None,
+                        "qty": 0.0,
+                        "avg_entry": 0.0,
+                        "dca_used": False,
+                        "entry_time": None,
+                    }
+                )
+                side, avg_entry, qty, dca_used = None, 0.0, 0.0, False
 
-    closed_margin = INITIAL_MARGIN + (
-        DCA_MARGIN if closed_dca else 0
-    )
-    closed_roe = (
-        realized_pnl / closed_margin * 100
-        if closed_margin > 0 else 0
-    )
-
-    if emergency_hit:
-        close_reason = "EMERGENCY SL"
-    elif soft_hit:
-        close_reason = "SOFT SL"
-    else:
-        close_reason = "TAKE PROFIT"
-
-    state["last_closed"] = {
-        "side": side,
-        "reason": close_reason,
-        "avg_entry": closed_avg,
-        "exit_price": close,
-        "qty": closed_qty,
-        "pnl_usd": realized_pnl,
-        "roe_pct": closed_roe,
-        "entry_time": state.get("entry_time"),
-        "exit_time": row["open_time"].strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
-    }
-
-    state.update({
-        "side": None,
-        "qty": 0.0,
-        "avg_entry": 0.0,
-        "dca_used": False,
-        "entry_time": None
-    })
-
-    side, avg_entry, qty, dca_used = None, 0.0, 0.0, False
-    # Không mở vị thế mới trên cùng nến vừa đóng vị thế.
-    if side is None and not exited:
+        # Do not open a new position on the same candle that closed one.
+        if side is None and not exited:
             if long_signal:
                 new_qty = INITIAL_MARGIN * LEVERAGE / close
-                state.update({"side": "LONG", "qty": new_qty, "avg_entry": close,
-                              "dca_used": False, "entry_time": row["open_time"].isoformat()})
-                send_event("LONG ENTRY", "LONG", close, row["open_time"],
-                           note=f"Khối lượng mô phỏng: {new_qty:.8f} BTC")
+                state.update(
+                    {
+                        "side": "LONG",
+                        "qty": new_qty,
+                        "avg_entry": close,
+                        "dca_used": False,
+                        "entry_time": row["open_time"].isoformat(),
+                    }
+                )
+                send_event(
+                    "LONG ENTRY", "LONG", close, row["open_time"],
+                    note=f"Khối lượng mô phỏng: {new_qty:.8f} BTC",
+                )
                 events_sent += 1
-            elif short_signal:
-                new_qty = INITIAL_MARGIN * LEVERAGE / close
-                state.update({"side": "SHORT", "qty": new_qty, "avg_entry": close,
-                              "dca_used": False, "entry_time": row["open_time"].isoformat()})
-                send_event("SHORT ENTRY", "SHORT", close, row["open_time"],
-                           note=f"Khối lượng mô phỏng: {new_qty:.8f} BTC")
-                events_sent += 1
-        elif side and not exited and not dca_used:
-            # ROE and DCA use the pre-DCA average entry, as in the supplied Pine logic.
-            current_roe = roe_for(side, avg_entry, close)
-            if side == "LONG":
-                dca_cond = (current_roe <= DCA_ROE and adx > DCA_ADX and
-                            rsi > LONG_DCA_RSI and rsi > prev_rsi)
-            else:
-                dca_cond = (current_roe <= DCA_ROE and adx > DCA_ADX and
-                            rsi < SHORT_DCA_RSI and rsi < prev_rsi)
-            if dca_cond:
-                add_qty = DCA_MARGIN * LEVERAGE / close
-                total_qty = qty + add_qty
-                new_avg = ((avg_entry * qty) + (close * add_qty)) / total_qty
-                state.update({"qty": total_qty, "avg_entry": new_avg, "dca_used": True})
-                send_event("DCA", side, close, row["open_time"], current_roe,
-                           f"Khối lượng DCA mô phỏng: {add_qty:.8f} BTC; giá vốn mô phỏng sau DCA: {fmt_price(new_avg)}")
-                events_sent += 1
-
-        state["last_processed_open"] = row["open_time"].isoformat()
-
-    save_state(state)
-
-latest = m15.iloc[-1]
-send_status_report(
-    state,
-    float(latest["close"]),
-    latest["open_time"]
-)
-
-print(
-    f"Processed {len(new_rows)} candle(s); "
-    f"sent {events_sent} Telegram event(s)."
-)
-print(
-    f"Status report sent; side={state.get('side')}, "
-    f"dca_used={state.get('dca_used')}, "
-    f"last={state.get('last_processed_open')}"
-)
-if __name__ == "__main__":
-    main()
+            elif short_s
