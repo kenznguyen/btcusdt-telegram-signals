@@ -36,12 +36,6 @@ FAPI = "https://fapi.binance.com"
 def utc_now():
     return datetime.now(timezone.utc)
 
-
-def get_klines(interval, limit=500):
-        r.raise_for_status()
-
-    payload = r.json()
-
 def get_klines(interval, limit=500):
     url = "https://www.okx.com/api/v5/market/history-candles"
 
