@@ -67,6 +67,9 @@ def get_klines(interval, limit=500):
     }
 
     r = requests.get(url, params=params, timeout=20)
+    if not r.ok:
+    print("Bybit HTTP status:", r.status_code)
+    print("Bybit response:", r.text[:1000])
     r.raise_for_status()
 
     payload = r.json()
